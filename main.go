@@ -13,10 +13,8 @@ import (
 	"sync"
 )
 
-
 const FEATURE_COUNT int = 5
-const MAX_WINDOW_LENGTH int = 7
-
+const MAX_WINDOW_LENGTH int = 1000
 
 type SafeCounter struct {
 	m sync.Mutex
@@ -191,7 +189,7 @@ func predict_anomaly(ad_block *AD_Block, window_stats_block Stats_Block) int {
 
 	for i := 0; i < FEATURE_COUNT; i++ {
 		diff := math.Abs(ad_block.Features[i] - window_stats_block.Avg[i])
-		mult := 2.0
+		mult := 1.5
 		if diff > mult*window_stats_block.Std[i] {
 			return 1
 		}
@@ -249,7 +247,7 @@ func process(c *gin.Context) {
 	if err != nil {
 		fmt.Println(err)
 	    c.JSON(http.StatusOK, gin.H{
-		  "message": "error",
+		  "message": "error4",
 		})
 		return
 	}
@@ -257,7 +255,7 @@ func process(c *gin.Context) {
 	if err := json.Unmarshal(jsonData, &request_object); err != nil {
     	fmt.Println(err)
     	c.JSON(http.StatusOK, gin.H{
-		  "message": "error",
+		  "message": "error0",
 		})
 		return
 	}
@@ -272,7 +270,7 @@ func process(c *gin.Context) {
 	if err := json.Unmarshal(*request_object["data"], &data); err != nil {
     	fmt.Println(err)
     	c.JSON(http.StatusOK, gin.H{	
-		  "message": "error",
+		  "message": "error1",
 		})
 		return
 	}
@@ -280,20 +278,22 @@ func process(c *gin.Context) {
 
 	var predictions []Single_Block_Prediction
 
+	var batch_size int = len(data)
+
+	batch_stats := make(map[string]float64)
 
 	for i := range data {
 
-		var prediction int = -1
 		id := uuid.New().String()
 
-		fmt.Println("Block Values:",id)
+		// fmt.Println("Block Values:",id)
 		
 		var block map[string]*json.RawMessage
 
 		if err := json.Unmarshal(*data[i], &block); err != nil {
 	    	fmt.Println(err)
 	    	c.JSON(http.StatusOK, gin.H{
-			  "message": "error",
+			  "message": "error2",
 			})
 			return
 		}
@@ -302,7 +302,10 @@ func process(c *gin.Context) {
 
 	    for key,value := range block {
 
+	    	// to do check for int and float 
 	    	
+	    	var prediction int = -1
+
     		timestamp := time.Now().Format(time.RFC850)
 	    	key_str := string(key)
 
@@ -313,7 +316,7 @@ func process(c *gin.Context) {
 	    	if isString {
 	    		
 	    		feature_array := get_str_features(value_str[1:len(value_str)-1])
-	    		fmt.Println(key_str,value_str[1:len(value_str)-1],feature_array)
+	    		// fmt.Println(key_str,value_str[1:len(value_str)-1],feature_array)
 	    		
 	    		ad_block = &AD_Block{
 	    			Stream:stream_str, 
@@ -370,6 +373,13 @@ func process(c *gin.Context) {
 
 			G_stats[window_slug].Total_writes += 1
 
+			if _, ok := batch_stats[key_str]; ok {
+				batch_stats[key_str] += float64(prediction)
+			} else {
+				batch_stats[key_str] = float64(prediction)
+			}
+
+
 	    } //key-value loop
 
 	    block_pred := Single_Block_Prediction{id,key_predictions}
@@ -380,8 +390,17 @@ func process(c *gin.Context) {
 
 	// fmt.Printf("%+v\n",*G_stats["pan_extraction#dob"].Window[0])
 
+
+	for key := range batch_stats {
+		batch_stats[key] = batch_stats[key] / float64(batch_size)
+	}
+
+
+	fmt.Printf("%+v\n",batch_stats)
+
 	c.JSON(http.StatusOK, gin.H{
 	  "message": "pong",
+	  "stats":batch_stats,
 	  "result": predictions,
 	})
 }
