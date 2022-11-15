@@ -189,7 +189,7 @@ func predict_anomaly(ad_block *AD_Block, window_stats_block Stats_Block) int {
 
 	for i := 0; i < FEATURE_COUNT; i++ {
 		diff := math.Abs(ad_block.Features[i] - window_stats_block.Avg[i])
-		mult := 1.5
+		mult := 2.0
 		if diff > mult*window_stats_block.Std[i] {
 			return 1
 		}
@@ -263,7 +263,7 @@ func process(c *gin.Context) {
 	stream_str := string(*request_object["stream"])
 	stream_str = stream_str[1:len(stream_str)-1]
 
-	fmt.Println("Stream: ",stream_str)
+	// fmt.Println("Stream: ",stream_str)
 	
 	var data []*json.RawMessage
 	
@@ -388,18 +388,17 @@ func process(c *gin.Context) {
 	
 	} // data blocks loop
 
-	// fmt.Printf("%+v\n",*G_stats["pan_extraction#dob"].Window[0])
-
+	// fmt.Printf("%+v\n",G_stats["pan_extraction#dob"].Window)
 
 	for key := range batch_stats {
 		batch_stats[key] = batch_stats[key] / float64(batch_size)
 	}
 
 
-	fmt.Printf("%+v\n",batch_stats)
+	// fmt.Printf("%+v\n",batch_stats)
 
 	c.JSON(http.StatusOK, gin.H{
-	  "message": "pong",
+	  "message": "success",
 	  "stats":batch_stats,
 	  "result": predictions,
 	})
@@ -411,6 +410,6 @@ func main(){
 
 	r := gin.Default()
 	r.POST("/sad/post", process)
-	r.Run()
+	r.Run("0.0.0.0:40404")
 
 }
