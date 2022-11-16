@@ -14,7 +14,7 @@ import (
 )
 
 const FEATURE_COUNT int = 5
-const MAX_WINDOW_LENGTH int = 1000
+const MAX_WINDOW_LENGTH int = 5000
 
 type SafeCounter struct {
 	m sync.Mutex
@@ -128,7 +128,7 @@ func get_str_features(s string) (feature_array [FEATURE_COUNT]float64){
 }
 
 
-func calculate_mean(arr [MAX_WINDOW_LENGTH]float64, count int) float64{
+func calculate_mean(arr []float64, count int) float64{
 	
 	var sum float64 = 0.0
 	for i := 0; i < count; i++ {
@@ -139,7 +139,7 @@ func calculate_mean(arr [MAX_WINDOW_LENGTH]float64, count int) float64{
 }
 
 
-func calculate_stddev(arr [MAX_WINDOW_LENGTH]float64, count int, mean float64) float64 {
+func calculate_stddev(arr []float64, count int, mean float64) float64 {
 	
 	var sd float64
 	for j := 0; j < count; j++ {
@@ -176,8 +176,8 @@ func get_window_stats(queue [MAX_WINDOW_LENGTH]*AD_Block) Stats_Block {
 
 
 	for i := 0; i < FEATURE_COUNT; i++ {
-		avg[i] = calculate_mean(copy_of_window[i],count)
-		std[i] = calculate_stddev(copy_of_window[i],count,avg[i])
+		avg[i] = calculate_mean(copy_of_window[i][:],count)
+		std[i] = calculate_stddev(copy_of_window[i][:],count,avg[i])
 	}
 
 	stats := Stats_Block{Avg : avg, Std : std}
@@ -185,10 +185,40 @@ func get_window_stats(queue [MAX_WINDOW_LENGTH]*AD_Block) Stats_Block {
 	return stats
 }
 
-func predict_anomaly(ad_block *AD_Block, window_stats_block Stats_Block) int {
+
+func get_batch_stats(queue []*AD_Block) Stats_Block {
+
+	copy_of_window := [FEATURE_COUNT][]float64{}
+
+	var avg [FEATURE_COUNT]float64
+	var std [FEATURE_COUNT]float64
+
+	var count int = 0
+
+	for count < len(queue) {
+    	
+    	ad_block := queue[count]
+
+		for i := 0; i < FEATURE_COUNT; i++ {
+			copy_of_window[i] = append(copy_of_window[i],ad_block.Features[i])
+		}	
+		count++	 
+	}
 
 	for i := 0; i < FEATURE_COUNT; i++ {
-		diff := math.Abs(ad_block.Features[i] - window_stats_block.Avg[i])
+		avg[i] = calculate_mean(copy_of_window[i][:],len(queue))
+		std[i] = calculate_stddev(copy_of_window[i][:],len(queue),avg[i])
+	}
+
+	stats := Stats_Block{Avg : avg, Std : std}
+
+	return stats
+}
+
+func predict_anomaly(batch_stats_block Stats_Block, window_stats_block Stats_Block) int {
+
+	for i := 0; i < FEATURE_COUNT; i++ {
+		diff := math.Abs(batch_stats_block.Avg[i] - window_stats_block.Avg[i])
 		mult := 2.0
 		if diff > mult*window_stats_block.Std[i] {
 			return 1
@@ -275,16 +305,18 @@ func process(c *gin.Context) {
 		return
 	}
 
+	batch_stats := make(map[string]int)
 
-	var predictions []Single_Block_Prediction
+	batch_block_store := make(map[string][]*AD_Block)
 
-	var batch_size int = len(data)
-
-	batch_stats := make(map[string]float64)
+	var prediction int = -1
+	
+	timestamp := time.Now().Format(time.RFC850)
 
 	for i := range data {
 
 		id := uuid.New().String()
+		
 
 		// fmt.Println("Block Values:",id)
 		
@@ -298,15 +330,10 @@ func process(c *gin.Context) {
 			return
 		}
 	    
-		var key_predictions []Single_Key_Prediction    
-
 	    for key,value := range block {
 
-	    	// to do check for int and float 
-	    	
-	    	var prediction int = -1
+	    	// todo: check for int and float 
 
-    		timestamp := time.Now().Format(time.RFC850)
 	    	key_str := string(key)
 
 	    	isString,_ := regexp.Match(`".*"`,*value)
@@ -340,6 +367,37 @@ func process(c *gin.Context) {
 	    	}
 
 	    	var window_slug string = stream_str+"#"+key_str
+			batch_block_store[window_slug] = append(batch_block_store[window_slug],ad_block)
+
+	    } //key-value loop
+
+	} // data blocks loop
+
+    for window_slug,ad_block_slice := range batch_block_store {
+
+    	if _, ok := G_stats[window_slug]; ok {
+			
+			total_predictions := G_stats[window_slug].Total_writes
+			if total_predictions >= uint64(MAX_WINDOW_LENGTH) {
+				window_stats_block := get_window_stats(G_stats[window_slug].Window)
+				batch_stats_block := get_batch_stats(ad_block_slice)
+				// fmt.Printf("%+v\n",window_slug)
+				// fmt.Printf("%+v\n",batch_stats_block)
+				// fmt.Printf("%+v\n",window_stats_block)
+				prediction = predict_anomaly(batch_stats_block,window_stats_block)
+			}
+
+		}
+
+		batch_stats[window_slug] = prediction
+    
+    } // make predctions loop
+
+    for window_slug,ad_block_slice := range batch_block_store {
+
+    	for i := range ad_block_slice {
+
+    		ad_block := ad_block_slice[i]
 
 	    	if _, ok := G_stats[window_slug]; ok {
 				
@@ -361,46 +419,18 @@ func process(c *gin.Context) {
 				G_stats[window_slug].Window[0] = ad_block
 		    }
 
-		    total_predictions := G_stats[window_slug].Total_writes
-			if total_predictions > uint64(MAX_WINDOW_LENGTH) {
-				window_stats_block := get_window_stats(G_stats[window_slug].Window)
-				prediction = predict_anomaly(ad_block,window_stats_block)
-			}
+		    G_stats[window_slug].Total_writes += 1
+		}
 
-			key_prediction_struct := Single_Key_Prediction{key_str,prediction}
+		// fmt.Printf("%+v\n",G_stats[window_slug])
 
-			key_predictions = append(key_predictions,key_prediction_struct)
-
-			G_stats[window_slug].Total_writes += 1
-
-			if _, ok := batch_stats[key_str]; ok {
-				batch_stats[key_str] += float64(prediction)
-			} else {
-				batch_stats[key_str] = float64(prediction)
-			}
-
-
-	    } //key-value loop
-
-	    block_pred := Single_Block_Prediction{id,key_predictions}
-
-	    predictions = append(predictions,block_pred)
-	
-	} // data blocks loop
-
-	// fmt.Printf("%+v\n",G_stats["pan_extraction#dob"].Window)
-
-	for key := range batch_stats {
-		batch_stats[key] = batch_stats[key] / float64(batch_size)
-	}
-
+    } // over-write window loop
 
 	// fmt.Printf("%+v\n",batch_stats)
 
 	c.JSON(http.StatusOK, gin.H{
 	  "message": "success",
 	  "stats":batch_stats,
-	  "result": predictions,
 	})
 }
 
