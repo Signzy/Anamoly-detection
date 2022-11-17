@@ -228,6 +228,48 @@ func predict_anomaly(batch_stats_block Stats_Block, window_stats_block Stats_Blo
 }
 
 
+func reset(c *gin.Context) {
+
+	var request_object map[string]string 
+	jsonData, err := c.GetRawData()
+	if err != nil {
+		fmt.Println(err)
+	    c.JSON(http.StatusOK, gin.H{
+		  "message": "error4",
+		})
+		return
+	}
+
+	if err := json.Unmarshal(jsonData, &request_object); err != nil {
+    	fmt.Println(err)
+    	c.JSON(http.StatusOK, gin.H{
+		  "message": "error0",
+		})
+		return
+	}
+
+	window_slug := request_object["buffer"]
+
+	if _, ok := G_stats[window_slug]; ok {
+		G_stats[window_slug].W_write_location.Set(0)
+		G_stats[window_slug].Total_writes = 0
+	
+	} else {
+		c.JSON(http.StatusNotFound, gin.H{
+			  "message": "no such buffer exists",
+		})
+		return	
+	}
+
+	
+
+	c.JSON(http.StatusOK, gin.H{
+		  "message": "buffer has been reset",
+	})
+	return
+}
+
+
 func process(c *gin.Context) {
 
 	/*
@@ -440,6 +482,7 @@ func main(){
 
 	r := gin.Default()
 	r.POST("/sad/post", process)
+	r.POST("/sad/reset", reset)
 	r.Run("0.0.0.0:40404")
 
 }
