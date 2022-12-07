@@ -220,7 +220,20 @@ func predict_anomaly(batch_stats_block Stats_Block, window_stats_block Stats_Blo
 	for i := 0; i < FEATURE_COUNT; i++ {
 		diff := math.Abs(batch_stats_block.Avg[i] - window_stats_block.Avg[i])
 		mult := 2.0
-		if diff > mult*window_stats_block.Std[i] {
+
+		acceptable_window := mult*window_stats_block.Std[i]
+
+		/*
+		in case the acceptable range of feature values flows into negative 
+		we resize acceptable range to be equal to value of average
+		need to rethink this based on experiments ^
+		*/
+		if window_stats_block.Avg[i] - acceptable_window < 0.0 &&
+			batch_stats_block.Avg[i] < window_stats_block.Avg[i] {
+			acceptable_window = window_stats_block.Avg[i]
+		}
+
+		if diff > acceptable_window {
 			return 1
 		}
 	}
@@ -253,7 +266,7 @@ func reset(c *gin.Context) {
 	if _, ok := G_stats[window_slug]; ok {
 		G_stats[window_slug].W_write_location.Set(0)
 		G_stats[window_slug].Total_writes = 0
-	
+
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{
 			  "message": "no such buffer exists",
@@ -479,6 +492,8 @@ func process(c *gin.Context) {
 func main(){
 
 	fmt.Println("Anomaly Detection");
+
+	gin.SetMode(gin.ReleaseMode)
 
 	r := gin.Default()
 	r.POST("/sad/post", process)
